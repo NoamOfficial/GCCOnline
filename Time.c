@@ -1,46 +1,53 @@
+// CMOS_TimeDriver.c
 #define CMOS_ADDRESS 0x70
 #define CMOS_DATA    0x71
 
-unsigned char cmos_read(unsigned char reg) {
-    outb(CMOS_ADDRESS, reg);
-    return inb(CMOS_DATA);
+// I/O port access
+static inline void outb(unsigned short port, unsigned char val) {
+    __asm__ volatile ("outb %0, %1" : : "a"(val), "Nd"(port));
 }
 
+static inline unsigned char inb(unsigned short port) {
+    unsigned char ret;
+    __asm__ volatile ("inb %1, %0" : "=a"(ret) : "Nd"(port));
+    return ret;
+}
+
+// BCD → Binary
 unsigned char bcd_to_bin(unsigned char val) {
     return (val & 0x0F) + ((val >> 4) * 10);
 }
 
-void get_cmos_time(
-    unsigned char* sec,
-    unsigned char* min,
-    unsigned char* hour,
-    unsigned char* day,
-    unsigned char* month,
-    unsigned char* year
-) {
-    // Wait until RTC is not updating
-    while(cmos_read(0x0A) & 0x80);
-
-    *sec   = cmos_read(0x00);
-    *min   = cmos_read(0x02);
-    *hour  = cmos_read(0x04);
-    *day   = cmos_read(0x07);
-    *month = cmos_read(0x08);
-    *year  = cmos_read(0x09);
-
-    // Check BCD/binary mode
-    unsigned char statusB = cmos_read(0x0B);
-    if (!(statusB & 0x04)) { // BCD mode
-        *sec   = bcd_to_bin(*sec);
-        *min   = bcd_to_bin(*min);
-        *hour  = bcd_to_bin(*hour);
-        *day   = bcd_to_bin(*day);
-        *month = bcd_to_bin(*month);
-        *year  = bcd_to_bin(*year);
+// CMOS Time Driver
+// buffer[0] = sec, buffer[1] = min, buffer[2] = hour
+// buffer[3] = day, buffer[4] = month, buffer[5] = year
+void get_cmos_time(unsigned char* buffer) {
+    // Wait until RTC not updating
+    while (1) {
+        outb(CMOS_ADDRESS, 0x0A);
+        if (!(inb(CMOS_DATA) & 0x80)) break;
     }
 
-    // Handle 12-hour format
-    if (!(statusB & 0x02) && (*hour & 0x80)) { // 12h PM
-        *hour = ((*hour & 0x7F) + 12) % 24;
+    // Read CMOS
+    outb(CMOS_ADDRESS, 0x00); buffer[0] = inb(CMOS_DATA);
+    outb(CMOS_ADDRESS, 0x02); buffer[1] = inb(CMOS_DATA);
+    outb(CMOS_ADDRESS, 0x04); buffer[2] = inb(CMOS_DATA);
+    outb(CMOS_ADDRESS, 0x07); buffer[3] = inb(CMOS_DATA);
+    outb(CMOS_ADDRESS, 0x08); buffer[4] = inb(CMOS_DATA);
+    outb(CMOS_ADDRESS, 0x09); buffer[5] = inb(CMOS_DATA);
+
+    // Status B
+    outb(CMOS_ADDRESS, 0x0B);
+    unsigned char statusB = inb(CMOS_DATA);
+
+    // Convert BCD → binary if needed
+    if (!(statusB & 0x04)) {
+        for (int i=0; i<6; i++) buffer[i] = bcd_to_bin(buffer[i]);
+    }
+
+    // 12-hour → 24-hour
+    if (!(statusB & 0x02) && (buffer[2] & 0x80)) {
+        buffer[2] = ((buffer[2] & 0x7F) + 12) % 24;
     }
 }
+
