@@ -28,7 +28,7 @@ void get_cmos_time(unsigned char* buffer) {
         if (!(inb(CMOS_DATA) & 0x80)) break;
     }
 
-    // Read CMOS
+    // Read CMOS registers
     outb(CMOS_ADDRESS, 0x00); buffer[0] = inb(CMOS_DATA);
     outb(CMOS_ADDRESS, 0x02); buffer[1] = inb(CMOS_DATA);
     outb(CMOS_ADDRESS, 0x04); buffer[2] = inb(CMOS_DATA);
@@ -42,7 +42,8 @@ void get_cmos_time(unsigned char* buffer) {
 
     // Convert BCD → binary if needed
     if (!(statusB & 0x04)) {
-        for (int i=0; i<6; i++) buffer[i] = bcd_to_bin(buffer[i]);
+        for (int i = 0; i < 6; i++)
+            buffer[i] = bcd_to_bin(buffer[i]);
     }
 
     // 12-hour → 24-hour
