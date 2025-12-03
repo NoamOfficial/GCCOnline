@@ -22,8 +22,8 @@ jobs:
         mkdir -p bin
         for file in $(find . -name "*.c"); do
           filename=$(basename "$file" .c)
-          gcc -Wall -o "bin/$filename.bin" "$file"
-        done
+          gcc -Wall -o "bin/$filename.bin" "$file" -nostdlib -m32 -freestanding
+          done
 
     - name: Upload compiled binaries
       uses: actions/upload-artifact@v4
