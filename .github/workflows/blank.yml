@@ -37,7 +37,7 @@ jobs:
         done
 
     - name: Upload 32-bit segmented BINs
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: UltimateOS-32bit-BINs
         path: build/
