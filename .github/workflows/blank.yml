@@ -1,33 +1,45 @@
-name: Compile C Files to BIN
+name: UltimateOS 32-bit Segmented BIN Build
 
 on:
   push:
-    paths:
-      - '**/*.c'    # triggers only when .c files change
-    branches: [ main ]
+    branches:
+      - main
+  pull_request:
 
 jobs:
-  compile:
+  build:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout repository
+    - name: Checkout repo
       uses: actions/checkout@v4
 
-    - name: Install GCC
-      run: sudo apt-get update && sudo apt-get install -y build-essential
+    - name: Install Clang and binutils
+      run: sudo apt update && sudo apt install -y clang binutils
 
-    - name: Compile each C file to BIN
+    - name: Create build directory
+      run: mkdir -p build
+
+    - name: Compile all .c files to object files
       run: |
-        mkdir -p bin
-        for file in $(find . -name "*.c"); do
-          filename=$(basename "$file" .c)
-          gcc -Wall -o "bin/$filename.bin" "$file" -nostdlib -m32 -freestanding
-          done
+        for src in $(find . -name "*.c"); do
+          obj="build/$(basename "${src%.c}.o")"
+          echo "Compiling $src -> $obj"
+          clang -m32 -ffreestanding -O2 -c "$src" -o "$obj"
+        done
 
-    - name: Upload compiled binaries
-      uses: actions/upload-artifact@v4
+    - name: Link each .o to 32-bit segmented .bin
+      run: |
+        for obj in build/*.o; do
+          base=$(basename "$obj" .o)
+          echo "Linking $obj -> build/$base.bin"
+          ld -m elf_i386 -N -e _start --oformat binary "$obj" -o "build/$base.bin" || true
+        done
+
+    - name: Upload 32-bit segmented BINs
+      uses: actions/upload-artifact@v3
       with:
-        name: compiled-binaries
-        path: bin/
+        name: UltimateOS-32bit-BINs
+        path: build/
+
 
