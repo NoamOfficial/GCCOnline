@@ -66,13 +66,44 @@ void SwitchWindow(NewWindow* newWin) {
 }
 
 // Run a command
-void RunCommand(int command) {
+void RunCommand(int command, int p1, int p2, int p3, int p4, int p5, int p6) 
+int cmdLen = sizeof(command)
     int input = command;
     int lba = 1;
-    unsigned short buffer = 0xFFFF;
+    unsigned short buffer = 0x2000;
 
     // Example inline ASM for raw C
-    ide-driver(1, 01, 4, buffer)
+    ide_driver(1, 1, 4, buffer);
+    while (command[cmdLen] != '\0') cmdLen++; // get command length
+
+    for (int i = 0; i < length - cmdLen - 10; i++) { 
+        // -10 to avoid overrun for startLBA+endLBA
+        int match = 1;
+        for (int j = 0; j < cmdLen; j++) {
+            if (buffer[i+j] != (unsigned char)command[j]) {
+                match = 0;
+                break;
+            }
+        }
+
+        if (match) {
+            // Found command name at position i
+            int startPos = i + cmdLen;          // immediately after command
+            startLBA = buffer[startPos] | (buffer[startPos+1] << 8); // 2 bytes
+            endLBA = 0;
+
+            // Next 8 bytes = endLBA (little endian)
+            for (int k = 0; k < 8; k++) {
+                endLBA |= ((unsigned long long)buffer[startPos+2+k]) << (8*k);
+                count = endLBA - startLBA;
+                ide_driver(1, startLBA, count, buffer);
+                _asm_(call far 0x2000:0)
+            }
+
+            // Done! You can break or continue if multiple commands
+            break;
+        }
+    }
 }
 
 
