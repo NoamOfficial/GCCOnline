@@ -4,10 +4,7 @@ typedef unsigned int   u32;
 typedef unsigned long long u64;
 typedef volatile u32   reg32;
 
-#define PCI_CONFIG_ADDRESS 0xCF8
-#define PCI_CONFIG_DATA    0xCFC
 #define AHCI_SECTOR_SIZE 512
-#define AHCI_PRDT_MAX_BYTES (4*1024*1024)
 
 #define PX_CLB 0x00
 #define PX_CLBU 0x04
@@ -27,33 +24,71 @@ typedef volatile u32   reg32;
 #define ATA_CMD_READ_DMA_EX  0x25
 #define ATA_CMD_WRITE_DMA_EX 0x35
 
-typedef struct{ reg32 clb,clbu,fb,fbu,is,ie,cmd,reserved0,tfd,sig,ssts,sctl,serr,sact,ci;} HBA_PORT;
-typedef struct{ u16 flags,prdtl; u32 prdbc,ctba,ctbau,reserved[4]; } HBA_CMD_HEADER;
-typedef struct{
-    u8 cfis[64]; u8 acmd[16]; u8 reserved[48];
-    struct{ u32 dba,dbau,reserved,dbc;} prdt_entry[1]; // single PRDT
+typedef struct { 
+    reg32 clb,clbu,fb,fbu,is,ie,cmd,reserved0,tfd,sig,ssts,sctl,serr,sact,ci; 
+} HBA_PORT;
+
+typedef struct { 
+    u16 flags,prdtl; 
+    u32 prdbc,ctba,ctbau,reserved[4]; 
+} HBA_CMD_HEADER;
+
+typedef struct {
+    u8 cfis[64]; 
+    u8 acmd[16]; 
+    u8 reserved[48];
+    struct { u32 dba,dbau,reserved,dbc; } prdt_entry[1]; // single PRDT
 } HBA_CMD_TABLE;
 
-static inline void outl(u32 port,u32 val){__asm__ volatile("outl %0,%1"::"a"(val),"Nd"(port));}
-static inline u32 inl(u32 port){u32 ret; __asm__ volatile("inl %1,%0":"=a"(ret):"Nd"(port));}
+// ------------------- I/O -------------------
+static inline void outl(u16 port,u32 val){ __asm__ volatile("outl %0,%1"::"a"(val),"d"(port)); }
+static inline u32 inl(u16 port){ u32 ret; __asm__ volatile("inl %1,%0":"=a"(ret):"d"(port)); return ret; }
 
-// PCI
-u32 pci_read(u8 bus,u8 slot,u8 func,u8 offset){u32 addr=(1<<31)|((u32)bus<<16)|((u32)slot<<11)|((u32)func<<8)|(offset&0xFC); outl(PCI_CONFIG_ADDRESS,addr); return inl(PCI_CONFIG_DATA);}
-u32 find_ahci_base(){for(u8 bus=0;bus<256;bus++) for(u8 slot=0;slot<32;slot++) for(u8 func=0;func<8;func++){u32 cc=pci_read(bus,slot,func,0x08); u8 pi=(cc>>8)&0xFF,sub=(cc>>16)&0xFF,bc=(cc>>24)&0xFF; if(bc==0x01 && sub==0x06 && pi==0x01) return pci_read(bus,slot,func,0x24)&0xFFFFFFF0;} return 0;}
-HBA_PORT* find_first_port(u32 base){HBA_PORT* ports=(HBA_PORT*)(base+0x100); for(int i=0;i<32;i++) if(ports[i].ssts & 0x0F) return &ports[i]; return 0;}
-void ahci_start_port(HBA_PORT* port){while(port->cmd & HBA_PxCMD_CR); port->cmd|=HBA_PxCMD_FRE|HBA_PxCMD_ST;}
-
-// IRQ handler
-void ahci_irq_handler(){
-    u32 base = find_ahci_base();
-    HBA_PORT* port = find_first_port(base);
-    if(!port) return;
-    u32 is = port->is;
-    if(is & HBA_PxIS_TFES){ /* handle error */ }
-    port->is = is; // clear interrupt
+// ------------------- PCI -------------------
+u32 pci_read(u8 bus,u8 slot,u8 func,u8 offset){ 
+    u32 addr=(1<<31)|((u32)bus<<16)|((u32)slot<<11)|((u32)func<<8)|(offset&0xFC); 
+    outl(0xCF8,addr); 
+    return inl(0xCFC); 
 }
 
-// Single PRDT, interrupt-driven AHCI command
+u32 find_ahci_base(){
+    for(int bus=0;bus<256;bus++)
+        for(int slot=0;slot<32;slot++)
+            for(int func=0;func<8;func++){
+                u32 cc=pci_read((u8)bus,(u8)slot,(u8)func,0x08);
+                u8 pi=(cc>>8)&0xFF, sub=(cc>>16)&0xFF, bc=(cc>>24)&0xFF;
+                if(bc==0x01 && sub==0x06 && pi==0x01)
+                    return pci_read((u8)bus,(u8)slot,(u8)func,0x24)&0xFFFFFFF0;
+            }
+    return 0;
+}
+
+// ------------------- PORT -------------------
+HBA_PORT* find_first_port(u32 base){ 
+    HBA_PORT* ports=(HBA_PORT*)(base+0x100); 
+    for(int i=0;i<32;i++) if(ports[i].ssts & 0x0F) return &ports[i]; 
+    return 0;
+}
+
+void ahci_start_port(HBA_PORT* port){
+    while(port->cmd & HBA_PxCMD_CR){ __asm__ volatile("nop"); }
+    port->cmd |= HBA_PxCMD_FRE|HBA_PxCMD_ST;
+}
+
+// ------------------- IRQ -------------------
+volatile u8 ahci_command_done=0;
+
+void ahci_irq_handler(){
+    u32 base=find_ahci_base();
+    HBA_PORT* port=find_first_port(base);
+    if(!port) return;
+    u32 is=port->is;
+    if(is & HBA_PxIS_TFES){ /* handle error */ }
+    port->is=is; // clear interrupt
+    ahci_command_done=1; // signal completion
+}
+
+// ------------------- AHCI CMD -------------------
 // funcname: 0=READ, 1=WRITE
 void ahci_cmd(u32 funcname,u32 startlba,u32 count,u32 buffer_seg,u32 cmdlist_offset){
     u32 base=find_ahci_base();
@@ -80,14 +115,11 @@ void ahci_cmd(u32 funcname,u32 startlba,u32 count,u32 buffer_seg,u32 cmdlist_off
     tbl->cfis[10]=(startlba>>16)&0xFF;
     tbl->cfis[12]=(startlba>>24)&0xFF;
 
+    ahci_command_done=0;
     port->ci=1;
 
-    // Wait for IRQ to signal completion
-    while(port->ci & 1); // ci cleared by AHCI hardware after command completion via interrupt
+    while(!ahci_command_done); // wait for IRQ to signal completion
 }
 
-// Example usage
-void test_ahci(){
-    ahci_cmd(0,0,16,0x102000,0); // READ 16 sectors from LBA 0
-    ahci_cmd(1,16,16,0x102000,0); // WRITE 16 sectors to LBA 16
-}
+
+
